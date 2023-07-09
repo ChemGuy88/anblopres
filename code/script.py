@@ -9,6 +9,8 @@ from pathlib import Path
 # Third-party packages
 from IPython import get_ipython
 import pandas as pd
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import StandardScaler
 # Local packages
 from drapi.drapi import getTimestamp, successiveParents, make_dir_path
 from appleHealthExport.code.functions import parseExportFile, getRecordTypes, getRecordsByAttributeValue, tabulateRecords
@@ -23,7 +25,7 @@ IDR_DATA_REQUEST_DIR_DEPTH = IRB_DIR_DEPTH + 3
 LOG_LEVEL = "INFO"
 
 # Settings: Interactive Pyplot
-get_ipython().run_line_magic('matplotlib', "")
+get_ipython().run_line_magic("matplotlib", "")
 
 # Variables: Path construction: General
 runTimestamp = getTimestamp()
@@ -141,8 +143,8 @@ if __name__ == "__main__":
             flagMedication = flagStartDatetime & flagEndDatetime
             table[medication] = flagMedication
         allMedications = [group for group in MEDICATION_DATETIMES.keys()]
-        table["QA: Unassigned (Medication)"] = ~table[allMedications].any()
-        logging.info(f"""All observations should be assigned to a group. The current table has {table["QA: Unassigned (Groups)"].sum()} unassigned observations.""")
+        table["QA: Unassigned (Medications)"] = ~table[allMedications].any()
+        logging.info(f"""All observations should be assigned to a group. The current table has {table["QA: Unassigned (Medications)"].sum()} unassigned observations.""")
 
     # Identify subgroups by time of day
     GROUP_1_START_TIME = pd.to_datetime("03:00:00-04:00")
@@ -195,16 +197,34 @@ if __name__ == "__main__":
         logging.info(f"""All observations should be assigned to a group. The current table has {table["QA: Unassigned (Groups)"].sum()} unassigned observations.""")
 
     # Perform statistical tests
-    # Test 1: by medication
-    # Test 2: by time
-    # Test 3: by medication and time
+    # Pre-processing
+    tablesProcessed = []
+    for table in tablesToProcess:
+        tablesProcessed.append(table)
+
+    # Unpack tables
+    dfSBP, dfDBP = tablesProcessed
 
     # Test 1: by medication
-    pass
+    columnsToUseMed = ["Amlodapine Potassium", "Losartan Potassium"]
+    mask = dfSBP[columnsToUseMed].any(axis=1)
+    xtrainSBP = dfSBP[columnsToUseMed][mask].astype(int).to_numpy()
+    ytrainSBP = dfSBP["value"][mask].astype(int).to_numpy().reshape(-1,1)
+    # Pre-processing
+    xscaler = StandardScaler()
+    xscaler.fit(xtrainSBP)
+    xstd = xscaler.transform(xtrainSBP)
+    yscaler = StandardScaler()
+    yscaler.fit(ytrainSBP)
+    ystd = yscaler.transform(ytrainSBP)
+    model1 = LinearRegression().fit(X=xstd,
+                                    y=ystd)
+
     # Test 2: by time
-    pass
+    columnsToUseMed = ["Group 1 (Morning)", "Group 2 (Evening)"]
+
     # Test 3: by medication and time
-    pass
+    columnsToUseMedTime = ["Amlodapine Potassium", "Losartan Potassium", "Group 1 (Morning)", "Group 2 (Evening)"]
 
     # End script
     logging.info(f"""Finished running "{thisFilePath.relative_to(projectDir)}".""")
