@@ -140,6 +140,9 @@ if __name__ == "__main__":
             flagEndDatetime = (t0ordinal < endDateOrdinal) & (endDateOrdinal < t1ordinal)
             flagMedication = flagStartDatetime & flagEndDatetime
             table[medication] = flagMedication
+        allMedications = [group for group in MEDICATION_DATETIMES.keys()]
+        table["QA: Unassigned (Medication)"] = ~table[allMedications].any()
+        logging.info(f"""All observations should be assigned to a group. The current table has {table["QA: Unassigned (Groups)"].sum()} unassigned observations.""")
 
     # Identify subgroups by time of day
     GROUP_1_START_TIME = pd.to_datetime("03:00:00-04:00")
@@ -186,8 +189,22 @@ if __name__ == "__main__":
                 flagGroup = flagStartTime & flagEndTime
             table[group] = flagGroup
 
+        # Perform QA
+        allGroups = [group for group in GROUP_TIMES.keys()]
+        table["QA: Unassigned (Groups)"] = ~table[allGroups].any()
+        logging.info(f"""All observations should be assigned to a group. The current table has {table["QA: Unassigned (Groups)"].sum()} unassigned observations.""")
+
     # Perform statistical tests
-    # TODO
+    # Test 1: by medication
+    # Test 2: by time
+    # Test 3: by medication and time
+
+    # Test 1: by medication
+    pass
+    # Test 2: by time
+    pass
+    # Test 3: by medication and time
+    pass
 
     # End script
     logging.info(f"""Finished running "{thisFilePath.relative_to(projectDir)}".""")
