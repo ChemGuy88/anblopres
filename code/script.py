@@ -11,6 +11,7 @@ from IPython import get_ipython
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
+import statsmodels.api as sm
 # Local packages
 from drapi.drapi import getTimestamp, successiveParents, make_dir_path
 from appleHealthExport.code.functions import parseExportFile, getRecordTypes, getRecordsByAttributeValue, tabulateRecords
@@ -111,9 +112,9 @@ if __name__ == "__main__":
     timeColumns = ["creationDate",
                    "startDate",
                    "endDate"]
-    tablesToProcess = [dfSBP,
-                       dfDBP]
-    for table in tablesToProcess:
+    TABLES_TO_PROCESS = {"Systolic BP": dfSBP,
+                         "Diastolic BP": dfDBP}
+    for tableName, table in TABLES_TO_PROCESS.items():
         for column in timeColumns:
             table[column] = pd.to_datetime(table[column])
 
@@ -130,7 +131,7 @@ if __name__ == "__main__":
                             "Losartan Potassium": {"start": LOSARTAN_START_DATETIME,
                                                    "stop": LOSARTAN_STOP_DATETIME}}
 
-    for table in tablesToProcess:
+    for tableName, table in TABLES_TO_PROCESS.items():
         for medication, datetimeDict in MEDICATION_DATETIMES.items():
             startDatetime = datetimeDict["start"]
             stopDatetime = datetimeDict["stop"]
@@ -170,7 +171,7 @@ if __name__ == "__main__":
     midnight2 = datetime.datetime(2023, 7, 9, 0, 0, 0, 0).time()
     m1 = time2ordinal(midnight1)
     m2 = time2ordinal(midnight2)
-    for table in tablesToProcess:
+    for tableName, table in TABLES_TO_PROCESS.items():
         for group, timeDict in GROUP_TIMES.items():
             startTime = timeDict["start"]
             stopTime = timeDict["stop"]
@@ -197,34 +198,67 @@ if __name__ == "__main__":
         logging.info(f"""All observations should be assigned to a group. The current table has {table["QA: Unassigned (Groups)"].sum()} unassigned observations.""")
 
     # Perform statistical tests
+    logging.info("""Performing statistical tests.""")
     # Pre-processing
-    tablesProcessed = []
-    for table in tablesToProcess:
-        tablesProcessed.append(table)
+    tablesProcessed = {}
+    for tableName, table in TABLES_TO_PROCESS.items():
+        tablesProcessed[tableName] = table
 
-    # Unpack tables
-    dfSBP, dfDBP = tablesProcessed
+    # Define test groups
+    COLUMNS_TO_USE_DICT = {"Medications": allMedications,
+                           "Time Groups": allGroups,
+                           "Medications and Time Groups": allMedications + allGroups}
+    modelResults = {tableName: {testGroup: {} for testGroup in COLUMNS_TO_USE_DICT.keys()} for tableName in tablesProcessed.keys()}
+    for tableName, table in tablesProcessed.items():
+        logging.info(f"""  Working on table "{tableName}".""")
+        for testGroup, columnsToUse in COLUMNS_TO_USE_DICT.items():
+            logging.info(f"""    Working on test group "{testGroup}".""")
+            mask = table[columnsToUse].any(axis=1)
+            xx = table[columnsToUse][mask]
+            yy = table["value"][mask]
+            xtrain = xx.astype(int).to_numpy()
+            ytrain = yy.astype(int).to_numpy().reshape(-1, 1)
+            # Pre-processing
+            xscaler = StandardScaler()
+            xscaler.fit(xtrain)
+            xstd = xscaler.transform(xtrain)
+            yscaler = StandardScaler()
+            yscaler.fit(ytrain)
+            ystd = yscaler.transform(ytrain)
+            # Model training: SKLearn Linear Regression
+            model1 = LinearRegression(fit_intercept=True)
+            model1 = model1.fit(X=xstd,
+                                y=ystd)
+            # Model training: StatsModel Linear Regression
+            exog = sm.add_constant(xx.astype(float))
+            endog = yy.astype(int)
+            model2 = sm.OLS(exog=exog, endog=endog)
+            result = model2.fit()
+            logging.info("""    Model training complete.""")
+            # Save model results
+            modelResults[tableName][testGroup]["sklearn"] = model1
+            modelResults[tableName][testGroup]["sm"] = model2
 
-    # Test 1: by medication
-    columnsToUseMed = ["Amlodapine Potassium", "Losartan Potassium"]
-    mask = dfSBP[columnsToUseMed].any(axis=1)
-    xtrainSBP = dfSBP[columnsToUseMed][mask].astype(int).to_numpy()
-    ytrainSBP = dfSBP["value"][mask].astype(int).to_numpy().reshape(-1,1)
-    # Pre-processing
-    xscaler = StandardScaler()
-    xscaler.fit(xtrainSBP)
-    xstd = xscaler.transform(xtrainSBP)
-    yscaler = StandardScaler()
-    yscaler.fit(ytrainSBP)
-    ystd = yscaler.transform(ytrainSBP)
-    model1 = LinearRegression().fit(X=xstd,
-                                    y=ystd)
+    # Print results for SKLearn Linear Regression
+    logging.info("""StatsModel model results""")
+    for tableName, table in tablesProcessed.items():
+        logging.info(f"""  Table "{tableName}".""")
+        for testGroup, columnsToUse in COLUMNS_TO_USE_DICT.items():
+            logging.info(f"""  Test group "{testGroup}".""")
+            model = modelResults[tableName][testGroup]["sklearn"]
+            logging.info(f"""  ..  Model coefficients: {model.coef_}.""")
 
-    # Test 2: by time
-    columnsToUseMed = ["Group 1 (Morning)", "Group 2 (Evening)"]
+    # Print results for StatsModel Linear Regression
+    logging.info("""StatsModel model results""")
+    for tableName, table in tablesProcessed.items():
+        logging.info(f"""  Table "{tableName}".""")
+        for testGroup, columnsToUse in COLUMNS_TO_USE_DICT.items():
+            logging.info(f"""  Test group "{testGroup}".""")
+            model = modelResults[tableName][testGroup]["sm"]
+            logging.info(f"""  ..  Results summary:\n{model.fit().summary().as_text()}.""")
 
-    # Test 3: by medication and time
-    columnsToUseMedTime = ["Amlodapine Potassium", "Losartan Potassium", "Group 1 (Morning)", "Group 2 (Evening)"]
+    # TODO: Conclusion, interpret results
+    pass
 
     # End script
     logging.info(f"""Finished running "{thisFilePath.relative_to(projectDir)}".""")
