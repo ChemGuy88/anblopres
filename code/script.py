@@ -5,16 +5,23 @@ Analysis of blood pressure exported from Apple Health
 import logging
 from pathlib import Path
 # Third-party packages
+from IPython import get_ipython
 import pandas as pd
 # Local packages
 from drapi.drapi import getTimestamp, successiveParents, make_dir_path
+from appleHealthExport.code.functions import parseExportFile, getRecordTypes, getRecordsByAttributeValue, tabulateRecords
 
 # Arguments
+DATA_FILE_PATH = Path("data/input/apple_health_export/export.xml")
+
 PROJECT_DIR_DEPTH = 2
 IRB_DIR_DEPTH = PROJECT_DIR_DEPTH + 1
 IDR_DATA_REQUEST_DIR_DEPTH = IRB_DIR_DEPTH + 3
 
 LOG_LEVEL = "INFO"
+
+# Settings: Interactive Pyplot
+get_ipython().run_line_magic('matplotlib', "")
 
 # Variables: Path construction: General
 runTimestamp = getTimestamp()
@@ -65,7 +72,7 @@ if __name__ == "__main__":
     logging.info(f"""Script arguments:
 
     # Arguments
-    ``: "{"..."}"
+    `DATA_FILE_PATH`: "{DATA_FILE_PATH}"
 
     # Arguments: General
     `PROJECT_DIR_DEPTH`: "{PROJECT_DIR_DEPTH}"
@@ -77,6 +84,28 @@ if __name__ == "__main__":
 
     # Script
     _ = pd
+
+    # Parse data
+    tree = parseExportFile(DATA_FILE_PATH)
+
+    # Get record types
+    recordTypes = getRecordTypes(tree=tree)
+
+    # Get systolic and diastolic blood pressure records
+    recordsSBP = getRecordsByAttributeValue(tree=tree,
+                                            attribute="type",
+                                            value="HKQuantityTypeIdentifierBloodPressureSystolic")
+    recordsDBP = getRecordsByAttributeValue(tree=tree,
+                                            attribute="type",
+                                            value="HKQuantityTypeIdentifierBloodPressureDiastolic")
+
+    # Tabulate blood pressure
+    dfSBP = tabulateRecords(records=recordsSBP)
+    dfDBP = tabulateRecords(records=recordsDBP)
+
+    # Analysis pre-processing
+    sbpTimes = pd.to_datetime(dfSBP["startDate"])
+    dbpTimes = pd.to_datetime(dfDBP["startDate"])
 
     # End script
     logging.info(f"""Finished running "{thisFilePath.relative_to(projectDir)}".""")
