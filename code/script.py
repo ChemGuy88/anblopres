@@ -2,7 +2,9 @@
 Analysis of blood pressure exported from Apple Health
 """
 
+import datetime
 import logging
+from datetime import datetime as dt
 from pathlib import Path
 # Third-party packages
 from IPython import get_ipython
@@ -104,8 +106,88 @@ if __name__ == "__main__":
     dfDBP = tabulateRecords(records=recordsDBP)
 
     # Analysis pre-processing
-    sbpTimes = pd.to_datetime(dfSBP["startDate"])
-    dbpTimes = pd.to_datetime(dfDBP["startDate"])
+    timeColumns = ["creationDate",
+                   "startDate",
+                   "endDate"]
+    tablesToProcess = [dfSBP,
+                       dfDBP]
+    for table in tablesToProcess:
+        for column in timeColumns:
+            table[column] = pd.to_datetime(table[column])
+
+    # Identify groups by medication start and end times.
+    # NOTE: Start times are inclusive. End times are not inclusive.
+    # I.e., if a medication is between both a stop and start time, it should
+    # be assigned to the start time's group.
+    AMLODAPINE_START_DATETIME = pd.to_datetime("2023-04-26 15:04:00-04:00")
+    AMLODAPINE_STOP_DATETIME = pd.to_datetime("2023-06-11 02:28:00-04:00")
+    LOSARTAN_START_DATETIME = pd.to_datetime("2023-06-11 02:28:00-04:00")
+    LOSARTAN_STOP_DATETIME = pd.to_datetime(dt.now())
+    MEDICATION_DATETIMES = {"Amlodapine Potassium": {"start": AMLODAPINE_START_DATETIME,
+                                                     "stop": AMLODAPINE_STOP_DATETIME},
+                            "Losartan Potassium": {"start": LOSARTAN_START_DATETIME,
+                                                   "stop": LOSARTAN_STOP_DATETIME}}
+
+    for table in tablesToProcess:
+        for medication, datetimeDict in MEDICATION_DATETIMES.items():
+            startDatetime = datetimeDict["start"]
+            stopDatetime = datetimeDict["stop"]
+            t0ordinal = startDatetime.toordinal()
+            t1ordinal = stopDatetime.toordinal()
+            startDateOrdinal = table["startDate"].apply(lambda ts: ts.toordinal())
+            endDateOrdinal = table["endDate"].apply(lambda ts: ts.toordinal())
+            flagStartDatetime = (t0ordinal <= startDateOrdinal) & (startDateOrdinal <= t1ordinal)
+            flagEndDatetime = (t0ordinal < endDateOrdinal) & (endDateOrdinal < t1ordinal)
+            flagMedication = flagStartDatetime & flagEndDatetime
+            table[medication] = flagMedication
+
+    # Identify subgroups by time of day
+    GROUP_1_START_TIME = pd.to_datetime("03:00:00-04:00")
+    GROUP_1_STOP_TIME = pd.to_datetime("12:00:00-04:00")
+    GROUP_2_START_TIME = pd.to_datetime("12:00:00-04:00")
+    GROUP_2_STOP_TIME = pd.to_datetime("03:00:00-04:00")
+    GROUP_TIMES = {"Group 1 (Morning)": {"start": GROUP_1_START_TIME,
+                                         "stop": GROUP_1_STOP_TIME},
+                   "Group 2 (Evening)": {"start": GROUP_2_START_TIME,
+                                         "stop": GROUP_2_STOP_TIME}}
+
+    def time2ordinal(pyTimeObj: datetime.time) -> int:
+        """
+        Converts a python `datetime.time`-type object into a microseconds-based integer ordinal.
+        """
+        hours = pyTimeObj.hour
+        minutes = pyTimeObj.minute + hours * 60
+        seconds = pyTimeObj.second + minutes * 60
+        microseconds = pyTimeObj.microsecond + seconds * 10**6
+        return microseconds
+
+    midnight1 = datetime.datetime(2023, 7, 9, 23, 59, 59, (10**6) - 1).time()
+    midnight2 = datetime.datetime(2023, 7, 9, 0, 0, 0, 0).time()
+    m1 = time2ordinal(midnight1)
+    m2 = time2ordinal(midnight2)
+    for table in tablesToProcess:
+        for group, timeDict in GROUP_TIMES.items():
+            startTime = timeDict["start"]
+            stopTime = timeDict["stop"]
+            t0 = time2ordinal(startTime)
+            t1 = time2ordinal(stopTime)
+            startDateOrdinal = table["startDate"].apply(lambda ts: time2ordinal(ts))
+            endDateOrdinal = table["endDate"].apply(lambda ts: time2ordinal(ts))
+            if t0 > t1:
+                pass  # TODO
+                flagStartTime1 = (t0 <= startDateOrdinal) & (startDateOrdinal <= m1)
+                flagStartTime2 = (m2 <= startDateOrdinal) & (startDateOrdinal <= t1)
+                flagEndTime1 = (t0 < endDateOrdinal) & (endDateOrdinal <= m1)
+                flagEndTime2 = (m2 <= endDateOrdinal) & (endDateOrdinal < t1)
+                flagGroup = (flagStartTime1 | flagStartTime2) & (flagEndTime1 | flagEndTime2)
+            else:
+                flagStartTime = (t0 <= startDateOrdinal) & (startDateOrdinal <= t1)
+                flagEndTime = (t0 < endDateOrdinal) & (endDateOrdinal < t1)
+                flagGroup = flagStartTime & flagEndTime
+            table[group] = flagGroup
+
+    # Perform statistical tests
+    # TODO
 
     # End script
     logging.info(f"""Finished running "{thisFilePath.relative_to(projectDir)}".""")
