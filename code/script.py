@@ -2,26 +2,23 @@
 Analysis of blood pressure exported from Apple Health
 """
 
-import datetime
+import json
 import logging
-from datetime import datetime as dt
 from pathlib import Path
 # Third-party packages
-from IPython import get_ipython
 import pandas as pd
+import scipy.stats as sps
+import statsmodels.api as sm
+from IPython import get_ipython
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
-import statsmodels.api as sm
 # Local packages
 from drapi.drapi import getTimestamp, successiveParents, make_dir_path
-from appleHealthExport.code.functions import parseExportFile, getRecordTypes, getRecordsByAttributeValue, tabulateRecords
 
 # Arguments
-DATA_FILE_PATH = Path("data/input/apple_health_export/export.xml")
+DATA_DIRECTORY = Path("data/output/processData/2023-07-10 00-44-33")
 
 PROJECT_DIR_DEPTH = 2
-IRB_DIR_DEPTH = PROJECT_DIR_DEPTH + 1
-IDR_DATA_REQUEST_DIR_DEPTH = IRB_DIR_DEPTH + 3
 
 LOG_LEVEL = "INFO"
 
@@ -33,8 +30,6 @@ runTimestamp = getTimestamp()
 thisFilePath = Path(__file__)
 thisFileStem = thisFilePath.stem
 projectDir, _ = successiveParents(thisFilePath.absolute(), PROJECT_DIR_DEPTH)
-IRBDir, _ = successiveParents(thisFilePath, IRB_DIR_DEPTH)
-IDRDataRequestDir, _ = successiveParents(thisFilePath.absolute(), IDR_DATA_REQUEST_DIR_DEPTH)
 dataDir = projectDir.joinpath("data")
 if dataDir:
     inputDataDir = dataDir.joinpath("input")
@@ -44,7 +39,6 @@ if dataDir:
 logsDir = projectDir.joinpath("logs")
 if logsDir:
     runLogsDir = logsDir.joinpath(thisFileStem)
-sqlDir = projectDir.joinpath("sql")
 
 # Variables: Path construction: Project-specific
 pass
@@ -77,131 +71,39 @@ if __name__ == "__main__":
     logging.info(f"""Script arguments:
 
     # Arguments
-    `DATA_FILE_PATH`: "{DATA_FILE_PATH}"
+    `DATA_DIRECTORY`: "{DATA_DIRECTORY}"
 
     # Arguments: General
     `PROJECT_DIR_DEPTH`: "{PROJECT_DIR_DEPTH}"
-    `IRB_DIR_DEPTH`: "{IRB_DIR_DEPTH}"
-    `IDR_DATA_REQUEST_DIR_DEPTH`: "{IDR_DATA_REQUEST_DIR_DEPTH}"
 
     `LOG_LEVEL` = "{LOG_LEVEL}"
     """)
 
-    # Script
-    _ = pd
+    # Load data directory
+    tablesDirectory = DATA_DIRECTORY.joinpath("tablesToProcess")
 
-    # Parse data
-    tree = parseExportFile(DATA_FILE_PATH)
+    # Load tables
+    tablesToProcess = {}
+    for fpath in tablesDirectory.iterdir():
+        table = pd.read_csv(fpath)
+        tablesToProcess[fpath.stem] = table
 
-    # Get record types
-    recordTypes = getRecordTypes(tree=tree)
+    # Load group and medication lists
+    jsonDir = DATA_DIRECTORY.joinpath("jsonDir")
 
-    # Get systolic and diastolic blood pressure records
-    recordsSBP = getRecordsByAttributeValue(tree=tree,
-                                            attribute="type",
-                                            value="HKQuantityTypeIdentifierBloodPressureSystolic")
-    recordsDBP = getRecordsByAttributeValue(tree=tree,
-                                            attribute="type",
-                                            value="HKQuantityTypeIdentifierBloodPressureDiastolic")
+    groupsPath = jsonDir.joinpath("allGroups.JSON")
+    with open(groupsPath, "r") as file:
+        allGroups = json.loads(file.read())
 
-    # Tabulate blood pressure
-    dfSBP = tabulateRecords(records=recordsSBP)
-    dfDBP = tabulateRecords(records=recordsDBP)
-
-    # Analysis pre-processing
-    timeColumns = ["creationDate",
-                   "startDate",
-                   "endDate"]
-    TABLES_TO_PROCESS = {"Systolic BP": dfSBP,
-                         "Diastolic BP": dfDBP}
-    for tableName, table in TABLES_TO_PROCESS.items():
-        for column in timeColumns:
-            table[column] = pd.to_datetime(table[column])
-
-    # Identify groups by medication start and end times.
-    # NOTE: Start times are inclusive. End times are not inclusive.
-    # I.e., if a medication is between both a stop and start time, it should
-    # be assigned to the start time's group.
-    AMLODAPINE_START_DATETIME = pd.to_datetime("2023-04-26 15:04:00-04:00")
-    AMLODAPINE_STOP_DATETIME = pd.to_datetime("2023-06-11 02:28:00-04:00")
-    LOSARTAN_START_DATETIME = pd.to_datetime("2023-06-11 02:28:00-04:00")
-    LOSARTAN_STOP_DATETIME = pd.to_datetime(dt.now())
-    MEDICATION_DATETIMES = {"Amlodapine Potassium": {"start": AMLODAPINE_START_DATETIME,
-                                                     "stop": AMLODAPINE_STOP_DATETIME},
-                            "Losartan Potassium": {"start": LOSARTAN_START_DATETIME,
-                                                   "stop": LOSARTAN_STOP_DATETIME}}
-
-    for tableName, table in TABLES_TO_PROCESS.items():
-        for medication, datetimeDict in MEDICATION_DATETIMES.items():
-            startDatetime = datetimeDict["start"]
-            stopDatetime = datetimeDict["stop"]
-            t0ordinal = startDatetime.toordinal()
-            t1ordinal = stopDatetime.toordinal()
-            startDateOrdinal = table["startDate"].apply(lambda ts: ts.toordinal())
-            endDateOrdinal = table["endDate"].apply(lambda ts: ts.toordinal())
-            flagStartDatetime = (t0ordinal <= startDateOrdinal) & (startDateOrdinal <= t1ordinal)
-            flagEndDatetime = (t0ordinal < endDateOrdinal) & (endDateOrdinal < t1ordinal)
-            flagMedication = flagStartDatetime & flagEndDatetime
-            table[medication] = flagMedication
-        allMedications = [group for group in MEDICATION_DATETIMES.keys()]
-        table["QA: Unassigned (Medications)"] = ~table[allMedications].any()
-        logging.info(f"""All observations should be assigned to a group. The current table has {table["QA: Unassigned (Medications)"].sum()} unassigned observations.""")
-
-    # Identify subgroups by time of day
-    GROUP_1_START_TIME = pd.to_datetime("03:00:00-04:00")
-    GROUP_1_STOP_TIME = pd.to_datetime("12:00:00-04:00")
-    GROUP_2_START_TIME = pd.to_datetime("12:00:00-04:00")
-    GROUP_2_STOP_TIME = pd.to_datetime("03:00:00-04:00")
-    GROUP_TIMES = {"Group 1 (Morning)": {"start": GROUP_1_START_TIME,
-                                         "stop": GROUP_1_STOP_TIME},
-                   "Group 2 (Evening)": {"start": GROUP_2_START_TIME,
-                                         "stop": GROUP_2_STOP_TIME}}
-
-    def time2ordinal(pyTimeObj: datetime.time) -> int:
-        """
-        Converts a python `datetime.time`-type object into a microseconds-based integer ordinal.
-        """
-        hours = pyTimeObj.hour
-        minutes = pyTimeObj.minute + hours * 60
-        seconds = pyTimeObj.second + minutes * 60
-        microseconds = pyTimeObj.microsecond + seconds * 10**6
-        return microseconds
-
-    midnight1 = datetime.datetime(2023, 7, 9, 23, 59, 59, (10**6) - 1).time()
-    midnight2 = datetime.datetime(2023, 7, 9, 0, 0, 0, 0).time()
-    m1 = time2ordinal(midnight1)
-    m2 = time2ordinal(midnight2)
-    for tableName, table in TABLES_TO_PROCESS.items():
-        for group, timeDict in GROUP_TIMES.items():
-            startTime = timeDict["start"]
-            stopTime = timeDict["stop"]
-            t0 = time2ordinal(startTime)
-            t1 = time2ordinal(stopTime)
-            startDateOrdinal = table["startDate"].apply(lambda ts: time2ordinal(ts))
-            endDateOrdinal = table["endDate"].apply(lambda ts: time2ordinal(ts))
-            if t0 > t1:
-                pass  # TODO
-                flagStartTime1 = (t0 <= startDateOrdinal) & (startDateOrdinal <= m1)
-                flagStartTime2 = (m2 <= startDateOrdinal) & (startDateOrdinal <= t1)
-                flagEndTime1 = (t0 < endDateOrdinal) & (endDateOrdinal <= m1)
-                flagEndTime2 = (m2 <= endDateOrdinal) & (endDateOrdinal < t1)
-                flagGroup = (flagStartTime1 | flagStartTime2) & (flagEndTime1 | flagEndTime2)
-            else:
-                flagStartTime = (t0 <= startDateOrdinal) & (startDateOrdinal <= t1)
-                flagEndTime = (t0 < endDateOrdinal) & (endDateOrdinal < t1)
-                flagGroup = flagStartTime & flagEndTime
-            table[group] = flagGroup
-
-        # Perform QA
-        allGroups = [group for group in GROUP_TIMES.keys()]
-        table["QA: Unassigned (Groups)"] = ~table[allGroups].any()
-        logging.info(f"""All observations should be assigned to a group. The current table has {table["QA: Unassigned (Groups)"].sum()} unassigned observations.""")
+    medicationsPath = jsonDir.joinpath("allMedications.JSON")
+    with open(medicationsPath, "r") as file:
+        allMedications = json.loads(file.read())
 
     # Perform statistical tests
     logging.info("""Performing statistical tests.""")
     # Pre-processing
     tablesProcessed = {}
-    for tableName, table in TABLES_TO_PROCESS.items():
+    for tableName, table in tablesToProcess.items():
         tablesProcessed[tableName] = table
 
     # Define test groups
@@ -255,10 +157,41 @@ if __name__ == "__main__":
         for testGroup, columnsToUse in COLUMNS_TO_USE_DICT.items():
             logging.info(f"""  Test group "{testGroup}".""")
             model = modelResults[tableName][testGroup]["sm"]
-            logging.info(f"""  ..  Results summary:\n{model.fit().summary().as_text()}.""")
+            logging.info(f"""  ..  Results summary:{model.fit().summary().as_text()}\n\n\n""")
+
+    # TODO Test for difference in variance between groups
+    pass
+
+    # t-tests for SBP and DBP
+    logging.info("Performing t-tests")
+    ttestResults = {tableName: {testGroup: {} for testGroup in COLUMNS_TO_USE_DICT.keys()} for tableName in tablesProcessed.keys()}
+    for tableName, table in tablesProcessed.items():
+        logging.info(f"""  Working on table "{tableName}".""")
+        for testGroup, columnsToUse in COLUMNS_TO_USE_DICT.items():
+            logging.info(f"""    Working on test group "{testGroup}".""")
+            group0Column = columnsToUse[0]
+            for group1Column in columnsToUse[1:]:
+                logging.info(f"""  ..  Comparing these two groups: "{group0Column}", "{group1Column}".""")
+                group0mask = table[group0Column].values
+                group1mask = table[group1Column].values
+                group0 = table[group0mask]["value"].astype(float)
+                group1 = table[group1mask]["value"].astype(float)
+                results = sps.ttest_ind(a=group0,
+                                        b=group1)
+                ttestResults[tableName][testGroup] = results
+                logging.info(f"""  ..    Results - p-value: {round(results.pvalue, 4)}""")
+                logging.info(f"""  ..    Results - t-statistics: {round(results.statistic, 4)}""")
+                group0Column = group1Column
+    # NOTE Conclusion. For both SBP and DBP morning and evening measurements are significantly different (p<0.01).
+
+    # TODO: p-tests for SBP and DBP
+    logging.info("Performing p-tests")
+
+    # TODO: Visualize the association between systolic and diastolic measurements.
+    pass
 
     # TODO: Conclusion, interpret results
-    pass
+    # NOTE The medication model has the lowest AIC, suggesting that the blood pressure medications are the best predictors of BP, and not the time-of-day models or the combined medication and time models.
 
     # End script
     logging.info(f"""Finished running "{thisFilePath.relative_to(projectDir)}".""")
