@@ -13,6 +13,7 @@ import pandas as pd
 # Local packages
 from drapi.drapi import getTimestamp, successiveParents, make_dir_path
 from appleHealthExport.code.functions import parseExportFile, getRecordTypes, getRecordsByAttributeValue, tabulateRecords, time2ordinal
+from code1.functions import parseTimes
 
 # Arguments
 DATA_FILE_PATH = Path("data/input/apple_health_export/export.xml")
@@ -96,14 +97,10 @@ if __name__ == "__main__":
     dfDBP = tabulateRecords(records=recordsDBP)
 
     # Analysis pre-processing
-    timeColumns = ["creationDate",
-                   "startDate",
-                   "endDate"]
     TABLES_TO_PROCESS = {"Systolic BP": dfSBP,
                          "Diastolic BP": dfDBP}
     for tableName, table in TABLES_TO_PROCESS.items():
-        for column in timeColumns:
-            table[column] = pd.to_datetime(table[column])
+        table = parseTimes(pdObject=table)
 
     # Identify groups by medication start and end times.
     # NOTE: Start times are inclusive. End times are not inclusive.
