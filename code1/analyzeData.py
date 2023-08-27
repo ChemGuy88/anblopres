@@ -1,5 +1,5 @@
 """
-Analysis of blood pressure exported from Apple Health
+Analysis of blood pressure exported from Apple Health, after being processed by "processData.py"
 """
 
 import json
