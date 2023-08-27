@@ -13,7 +13,7 @@ import pandas as pd
 # Local packages
 from drapi.drapi import getTimestamp, successiveParents, make_dir_path
 from appleHealthExport.code.functions import parseExportFile, getRecordTypes, getRecordsByAttributeValue, tabulateRecords, time2ordinal
-from code1.functions import parseTimes
+from code1.functions import parseTimes, labelByDatetimeSpan
 
 # Arguments
 DATA_FILE_PATH = Path("data/input/apple_health_export/export.xml")
@@ -53,21 +53,30 @@ make_dir_path(runLogsDir)
 # Directory creation: Project-specific
 pass
 
+# Logging block
+logpath = runLogsDir.joinpath(f"log {runTimestamp}.log")
+# logFormat = logging.Formatter(f"""[%(asctime)s]\n[%(levelname)s](%(funcName)s)\n{"-"*24}> %(message)s""")
+logFormat = logging.Formatter("""[%(asctime)s][%(levelname)s](%(funcName)s): %(message)s""")
+
+logger = logging.getLogger(__name__)
+
+fileHandler = logging.FileHandler(logpath)
+fileHandler.setLevel(9)
+fileHandler.setFormatter(logFormat)
+
+streamHandler = logging.StreamHandler()
+streamHandler.setLevel(LOG_LEVEL)
+streamHandler.setFormatter(logFormat)
+
+logger.addHandler(fileHandler)
+logger.addHandler(streamHandler)
+
+logger.setLevel(9)
+
 if __name__ == "__main__":
-    # Logging block
-    logpath = runLogsDir.joinpath(f"log {runTimestamp}.log")
-    fileHandler = logging.FileHandler(logpath)
-    fileHandler.setLevel(LOG_LEVEL)
-    streamHandler = logging.StreamHandler()
-    streamHandler.setLevel(LOG_LEVEL)
-
-    logging.basicConfig(format="[%(asctime)s][%(levelname)s](%(funcName)s): %(message)s",
-                        handlers=[fileHandler, streamHandler],
-                        level=LOG_LEVEL)
-
-    logging.info(f"""Begin running "{thisFilePath}".""")
-    logging.info(f"""All other paths will be reported in debugging relative to `projectDir`: "{projectDir}".""")
-    logging.info(f"""Script arguments:
+    logger.info(f"""Begin running "{thisFilePath}".""")
+    logger.info(f"""All other paths will be reported in debugging relative to `projectDir`: "{projectDir}".""")
+    logger.info(f"""Script arguments:
 
     # Arguments
     `DATA_FILE_PATH`: "{DATA_FILE_PATH}"
@@ -103,9 +112,6 @@ if __name__ == "__main__":
         table = parseTimes(pdObject=table)
 
     # Identify groups by medication start and end times.
-    # NOTE: Start times are inclusive. End times are not inclusive.
-    # I.e., if a medication is between both a stop and start time, it should
-    # be assigned to the start time's group.
     AMLODAPINE_START_DATETIME = pd.to_datetime("2023-04-26 15:04:00-04:00")
     AMLODAPINE_STOP_DATETIME = pd.to_datetime("2023-06-11 02:28:00-04:00")
     LOSARTAN_START_DATETIME = pd.to_datetime("2023-06-11 02:28:00-04:00")
@@ -115,21 +121,10 @@ if __name__ == "__main__":
                             "Losartan Potassium": {"start": LOSARTAN_START_DATETIME,
                                                    "stop": LOSARTAN_STOP_DATETIME}}
 
-    for tableName, table in TABLES_TO_PROCESS.items():
-        for medication, datetimeDict in MEDICATION_DATETIMES.items():
-            startDatetime = datetimeDict["start"]
-            stopDatetime = datetimeDict["stop"]
-            t0ordinal = startDatetime.toordinal()
-            t1ordinal = stopDatetime.toordinal()
-            startDateOrdinal = table["startDate"].apply(lambda ts: ts.toordinal())
-            endDateOrdinal = table["endDate"].apply(lambda ts: ts.toordinal())
-            flagStartDatetime = (t0ordinal <= startDateOrdinal) & (startDateOrdinal <= t1ordinal)
-            flagEndDatetime = (t0ordinal < endDateOrdinal) & (endDateOrdinal < t1ordinal)
-            flagMedication = flagStartDatetime & flagEndDatetime
-            table[medication] = flagMedication
-        allMedications = [group for group in MEDICATION_DATETIMES.keys()]
-        table["QA: Unassigned (Medications)"] = ~table[allMedications].any()
-        logging.info(f"""All observations should be assigned to a group. The current table has {table["QA: Unassigned (Medications)"].sum()} unassigned observations.""")
+    TABLES_TO_PROCESS, qaTables = labelByDatetimeSpan(tablesToProcess=TABLES_TO_PROCESS,
+                                                      labelDatetimes=MEDICATION_DATETIMES,
+                                                      troubleshooting=True,
+                                                      logger=logger)
 
     # Identify subgroups by time of day
     GROUP_1_START_TIME = pd.to_datetime("03:00:00-04:00")
@@ -169,7 +164,7 @@ if __name__ == "__main__":
         # Perform QA
         allGroups = [group for group in GROUP_TIMES.keys()]
         table["QA: Unassigned (Groups)"] = ~table[allGroups].any()
-        logging.info(f"""All observations should be assigned to a group. The current table has {table["QA: Unassigned (Groups)"].sum()} unassigned observations.""")
+        logger.info(f"""All observations should be assigned to a group. The current table has {table["QA: Unassigned (Groups)"].sum()} unassigned observations.""")
 
     # Save tables
     tablesDir = runOutputDir.joinpath("tablesToProcess")
@@ -186,11 +181,11 @@ if __name__ == "__main__":
     with open(groupsPath, "w") as file:
         file.write(json.dumps(allGroups))
 
-    medicationsPath = jsonDir.joinpath("allMedications.JSON")
-    with open(medicationsPath, "w") as file:
-        file.write(json.dumps(allMedications))
+    qaTablesPath = jsonDir.joinpath("qaTables.JSON")
+    with open(qaTablesPath, "w") as file:
+        file.write(json.dumps(qaTables))
 
-    logging.info(f"""All results saved to "{runOutputDir.absolute().relative_to(projectDir)}".""")
+    logger.info(f"""All results saved to "{runOutputDir.absolute().relative_to(projectDir)}".""")
 
     # End script
-    logging.info(f"""Finished running "{thisFilePath.absolute().relative_to(projectDir)}".""")
+    logger.info(f"""Finished running "{thisFilePath.absolute().relative_to(projectDir)}".""")
